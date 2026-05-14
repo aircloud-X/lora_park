@@ -12,11 +12,11 @@
 #define LED_G_PIN GPIO_NUM_25
 #define LED_B_PIN GPIO_NUM_27
 
-#define LED1_PIN GPIO_NUM_19 // 普通LED2
-#define LED2_PIN GPIO_NUM_21 // 普通LED3
-#define LED3_PIN GPIO_NUM_13 // 普通LED4
-#define LED4_PIN GPIO_NUM_14 // 普通LED5
-#define LED5_PIN GPIO_NUM_32 // 普通LED6
+#define LED1_PIN GPIO_NUM_19 // 普通LED1
+#define LED2_PIN GPIO_NUM_21 // 普通LED2
+#define LED3_PIN GPIO_NUM_13 // 普通LED3
+#define LED4_PIN GPIO_NUM_14 // 普通LED4
+#define LED5_PIN GPIO_NUM_32 // 普通LED5
 
 // 按键引脚
 #define KEY_PIN GPIO_NUM_18 // 测试按键
