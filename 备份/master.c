@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/uart.h"
@@ -17,10 +18,11 @@
 
 #define UART_NUM       UART_NUM_1
 #define UART_BUF_SIZE   1024
-#define TAG "LORA_SLAVE"
+#define TAG "LORA_MASTER"
 
-#define DEVICE_ADDR        0x02    // 从机1：0x02
-#define MASTER_ADDR        0x01    // 主机固定地址
+#define DEVICE_ADDR        0x01    // 主机地址
+#define FIRST_SLAVE        0x02    // 第一个从机
+#define SECOND_SLAVE       0x03    // 第二个从机
 
 void lora_wait_idle(void) {
     while (gpio_get_level(LORA_AUX_PIN) == 0) {
@@ -31,10 +33,11 @@ void lora_wait_idle(void) {
 
 void gpio_init(void) {
     gpio_config_t led_conf = {
-        .pin_bit_mask = (1ULL << LED3_PIN),
+        .pin_bit_mask = (1ULL << LED2_PIN) | (1ULL << LED3_PIN),
         .mode = GPIO_MODE_OUTPUT,
     };
     gpio_config(&led_conf);
+    gpio_set_level(LED2_PIN, 0);
     gpio_set_level(LED3_PIN, 0);
 
     gpio_config_t key_conf = {
@@ -62,18 +65,22 @@ void uart_init(void) {
     uart_param_config(UART_NUM, &uart_cfg);
     uart_set_pin(UART_NUM, LORA_RX_PIN, LORA_TX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     uart_driver_install(UART_NUM, UART_BUF_SIZE, UART_BUF_SIZE, 0, NULL, 0);
-    ESP_LOGI(TAG, "✅ 从机初始化 地址:0x%02X", DEVICE_ADDR);
+    ESP_LOGI(TAG, "✅ 主机初始化 地址:0x%02X", DEVICE_ADDR);
     vTaskDelay(pdMS_TO_TICKS(100));
     lora_wait_idle();
 }
 
-void lora_reply(const char *data) {
+void lora_send_to(uint8_t dest_addr, const char *data) {
     char packet[128];
-    snprintf(packet, sizeof(packet), "%02X,%02X,%s", MASTER_ADDR, DEVICE_ADDR, data);
+    snprintf(packet, sizeof(packet), "%02X,%02X,%s", dest_addr, DEVICE_ADDR, data);
 
     lora_wait_idle();
     uart_write_bytes(UART_NUM, packet, strlen(packet));
-    ESP_LOGI(TAG, "==> 回复主机: %s", data);
+
+    gpio_set_level(LED2_PIN, 1);
+    ESP_LOGI(TAG, "==> 主机 → 从机[0x%02X]: %s", dest_addr, data);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    gpio_set_level(LED2_PIN, 0);
 }
 
 bool lora_parse_packet(uint8_t *dest_addr, uint8_t *src_addr, char *out_data, const char *buf) {
@@ -90,45 +97,52 @@ void app_main(void) {
     gpio_init();
     uart_init();
     uint8_t buf[UART_BUF_SIZE];
-    uint8_t last_key_state = gpio_get_level(KEY_PIN);
-    uint32_t key_check_tick = 0;
+    uint32_t tick = 0;
+    uint8_t current_slave = FIRST_SLAVE;
 
     while (1) {
-        int len = uart_read_bytes(UART_NUM, buf, UART_BUF_SIZE, pdMS_TO_TICKS(50));
+        // 主机轮询从机
+        if (xTaskGetTickCount() - tick >= pdMS_TO_TICKS(3000)) {
+            tick = xTaskGetTickCount();
+            lora_send_to(current_slave, "PING");
+            
+            // 切换从机
+            current_slave = (current_slave == FIRST_SLAVE) ? SECOND_SLAVE : FIRST_SLAVE;
+        }
+
+        // 接收从机回复
+        int len = uart_read_bytes(UART_NUM, buf, UART_BUF_SIZE, pdMS_TO_TICKS(20));
         if (len > 0) {
             buf[len] = 0;
             uint8_t dest_addr, src_addr;
             char data[100];
 
             if (lora_parse_packet(&dest_addr, &src_addr, data, (char*)buf)) {
-                // 只处理主机发给我的指令
-                if (src_addr == MASTER_ADDR && dest_addr == DEVICE_ADDR) {
-                    ESP_LOGI(TAG, "✅ 收到主机指令: %s", data);
-                    gpio_set_level(LED3_PIN, 1);
-                    
-                    // 回复 PONG
-                    lora_reply("PONG");
-                    
-                    vTaskDelay(pdMS_TO_TICKS(100));
-                    gpio_set_level(LED3_PIN, 0);
+                if (dest_addr == DEVICE_ADDR) {
+                    // 检查是否是 KEY 状态变化
+                    if (strncmp(data, "KEY:", 4) == 0) {
+                        int key_state = atoi(&data[4]);
+                        ESP_LOGI(TAG, "🔑 从机[0x%02X] KEY变化: %d", src_addr, key_state);
+                        // 根据不同从机的KEY状态控制不同LED
+                        if (src_addr == FIRST_SLAVE && key_state == 0) {
+                            gpio_set_level(LED2_PIN, 1);
+                            vTaskDelay(pdMS_TO_TICKS(200));
+                            gpio_set_level(LED2_PIN, 0);
+                        } else if (src_addr == SECOND_SLAVE && key_state == 0) {
+                            gpio_set_level(LED3_PIN, 1);
+                            vTaskDelay(pdMS_TO_TICKS(200));
+                            gpio_set_level(LED3_PIN, 0);
+                        }
+                    } else {
+                        // 一般的PONG回复
+                        ESP_LOGI(TAG, "✅ 从机[0x%02X]回复: %s", src_addr, data);
+                        gpio_set_level(LED3_PIN, 1);
+                        vTaskDelay(pdMS_TO_TICKS(100));
+                        gpio_set_level(LED3_PIN, 0);
+                    }
                 }
             }
         }
-
-        // 检测 KEY_PIN 状态变化
-        if (xTaskGetTickCount() - key_check_tick >= pdMS_TO_TICKS(50)) {
-            key_check_tick = xTaskGetTickCount();
-            uint8_t current_key_state = gpio_get_level(KEY_PIN);
-            
-            if (current_key_state != last_key_state) {
-                last_key_state = current_key_state;
-                char key_msg[20];
-                snprintf(key_msg, sizeof(key_msg), "KEY:%d", current_key_state);
-                lora_reply(key_msg);
-                ESP_LOGI(TAG, "🔑 KEY状态变化: %d", current_key_state);
-            }
-        }
-
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
