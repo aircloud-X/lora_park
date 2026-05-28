@@ -6,8 +6,8 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 
-#define LED_R_PIN GPIO_NUM_25
-#define LED_G_PIN GPIO_NUM_26
+#define LED_R_PIN GPIO_NUM_26
+#define LED_G_PIN GPIO_NUM_25
 #define LED_B_PIN GPIO_NUM_27
 #define LED1_PIN GPIO_NUM_19
 #define LED2_PIN GPIO_NUM_21
